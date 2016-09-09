@@ -1,60 +1,20 @@
 import "babel-polyfill";
-import {EventEmitter} from "events";
 
+import {Mock as couchbaseMock} from "couchbase";
 import co from "co";
 import sinon from "sinon";
 import chai from "chai";
 import mockery from "mockery";
+import _ from "lodash";
 
 const assert = chai.assert;
 
-const valid = {
+const options = {
   connect: "couchbase://localhost",
   bucketName: "session",
-  bucketPassword: "password"
+  bucketPassword: "asdlfkjasd"
 };
 
-const delay = 100;
-
-/**
-* A mock bucket class
-*/
-class Bucket extends EventEmitter {
-  constructor( valid ) {
-    super();
-
-    setTimeout( () => {
-      console.log("Abc", valid)
-      if (valid) {
-        this.emit( "connect", null );
-      }
-      else {
-        this.emit( "error", "fail" );
-      }
-    }, delay );
-  }
-}
-
-/**
-* A mock cluster class
-*/
-class Cluster  {
-
-  constructor( connect ) {
-    this.valid = connect === valid.connect;
-    this.openBucket = sinon.spy( this.openBucket );
-  }
-
-  openBucket( name, password ) {
-    const bucketValid = this.valid &&
-      (name===valid.bucketName) && (password===valid.bucketPassword);
-    return new Bucket( bucketValid );
-  }
-}
-
-/**
-* Prepare for the tests
-*/
 function beforeTests() {
 
   mockery.enable({
@@ -63,62 +23,123 @@ function beforeTests() {
     warnOnUnregistered: false
   });
 
-  this.couchbase = {
-    Cluster: sinon.spy(Cluster)
-  };
+  this.sandbox = sinon.sandbox.create();
+  this.sandbox.spy( couchbaseMock, "Cluster" );
+  this.sandbox.spy( couchbaseMock.Cluster.prototype, "openBucket" )
 
-  mockery.registerMock( "couchbase", this.couchbase );
+  mockery.registerMock( "couchbase", couchbaseMock );
 
   this.CouchbaseSessionStore = require("../src/index").default;
 
 }
 
-/**
-* Tear down after tests
-*/
 function afterTests() {
+  this.sandbox.restore();
   mockery.disable();
 }
 
-
-describe('CouchbaseSessionStore constructor', function() {
+describe("CouchbaseSessionStore", function() {
 
   beforeEach( beforeTests );
   afterEach( afterTests );
 
-  it('should properly initialize couchbase cluster and bucket when open=true', function( done ) {
+  const id = "1";
 
-    const store = new this.CouchbaseSessionStore({
-      connect: valid.connect,
-      bucketName: valid.bucketName,
-      bucketPassword: valid.bucketPassword,
-      open: true
-    });
+  const id_invalid = "2";
 
-    store.on( "connect", () => {
+  const session = {
+    foo: "bar"
+  };
 
-      assert( this.couchbase.Cluster.called);
-      assert( this.couchbase.Cluster.calledWith( options.cluster ));
+  describe( "constructor", function() {
 
-      //assert(this.state.cluster.openBucket.called);
-      //assert(this.state.cluster.openBucket.calledWith( options.bucket ));
+    it('should properly initialize couchbase cluster and bucket', function( done ) {
 
-      done();
+      const store = new this.CouchbaseSessionStore(options);
+
+      store.on( "connect", () => {
+
+        assert( couchbaseMock.Cluster.calledOnce );
+        assert( couchbaseMock.Cluster.calledWith( options.connect ));
+        assert( store.cluster.openBucket.calledOnce );
+        assert( store.cluster.openBucket.calledWith( options.bucketName, options.bucketPassword ));
+
+        done();
+
+      });
 
     });
 
   });
 
-  it('should not initialize couchbase cluster and bucket when open=false', function() {
+  describe( "set/get", function() {
 
-    const store = new this.CouchbaseSessionStore({
-      connect: valid.connect,
-      bucketName: valid.bucketName,
-      bucketPassword: valid.bucketPassword,
-      open: false
+    it( "should set a value and read it back out", function(done) {
+
+      const store = new this.CouchbaseSessionStore(options);
+      store.on( "connect", () => {
+
+        store.set(id,session).then( () => {
+
+          store.get( id ).then( retrievedSession => {
+
+            assert(_.isEqual( session, retrievedSession));
+            done();
+
+          });
+
+        });
+
+      });
+
     });
 
-    assert(!this.couchbase.Cluster.called, "Cluster constructor should not be called");
+    it( "should return null for invalid key", function(done) {
+
+      const store = new this.CouchbaseSessionStore(options);
+      store.on( "connect", () => {
+
+        store.get( id_invalid ).then( retrievedSession => {
+
+          assert( retrievedSession === null );
+          done();
+
+        });
+
+      });
+
+    });
 
   });
+
+  describe( "destroy", function() {
+
+    it( "should set a value and destroy it", function(done) {
+
+      const store = new this.CouchbaseSessionStore(options);
+      store.on( "connect", () => {
+
+        store.set(id,session).then( () => {
+
+          store.destroy( id ).then( done );
+
+        });
+
+      });
+
+    });
+
+    it( "should not fail on an invalid key", function(done) {
+
+      const store = new this.CouchbaseSessionStore(options);
+      store.on( "connect", () => {
+
+        store.destroy(id_invalid).then(done);
+
+      });
+
+    });
+
+  });
+
 });
